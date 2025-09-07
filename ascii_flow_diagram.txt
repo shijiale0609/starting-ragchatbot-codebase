@@ -1,0 +1,159 @@
+RAG SYSTEM QUERY PROCESSING FLOW
+=====================================
+
+FRONTEND TO BACKEND QUERY FLOW:
+-------------------------------
+
+┌─────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│    USER     │    │   FRONTEND      │    │   FASTAPI       │
+│             │    │   (script.js)   │    │   (app.py)      │
+└─────────────┘    └─────────────────┘    └─────────────────┘
+       │                     │                      │
+       │ 1. Types query      │                      │
+       │    & clicks send    │                      │
+       ├────────────────────>│                      │
+                             │ 2. POST /api/query   │
+                             │    {query,           │
+                             │     session_id}      │
+                             ├─────────────────────>│
+                                                    │
+┌─────────────────────────────────────────────────────────────────────┐
+│                        BACKEND PROCESSING                           │
+│                                                                     │
+│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐  │
+│  │   RAG SYSTEM    │    │ SESSION MANAGER │    │  AI GENERATOR   │  │
+│  │ (rag_system.py) │    │(session_mgr.py)│    │(ai_generator.py)│  │
+│  └─────────────────┘    └─────────────────┘    └─────────────────┘  │
+│           │                       │                       │        │
+│           │ 3. query(q, sess_id)  │                       │        │
+│           ├──────────────────────>│                       │        │
+│           │                       │                       │        │
+│           │ 4. get_history()      │                       │        │
+│           ├──────────────────────>│                       │        │
+│           │       chat context    │                       │        │
+│           │<──────────────────────┤                       │        │
+│           │                                               │        │
+│           │ 5. generate_response(query, history, tools)   │        │
+│           ├──────────────────────────────────────────────>│        │
+│                                                                     │
+│  ┌─────────────────┐                            ┌─────────────────┐  │
+│  │  TOOL MANAGER   │                            │  VECTOR STORE   │  │
+│  │(search_tools.py)│                            │(vector_store.py)│  │
+│  └─────────────────┘                            └─────────────────┘  │
+│           │                                               │        │
+│           │ 6. Claude decides to search                   │        │
+│           │    execute("search_course_content")           │        │
+│           │<──────────────────────────────────────────────┤        │
+│           │                                               │        │
+│           │ 7. search(query, course, lesson)              │        │
+│           ├──────────────────────────────────────────────>│        │
+│                                                                     │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │                    CHROMADB                             │    │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐  │    │
+│  │  │   COURSE    │  │   LESSON    │  │     CONTENT     │  │    │
+│  │  │  METADATA   │  │  METADATA   │  │     CHUNKS      │  │    │
+│  │  └─────────────┘  └─────────────┘  └─────────────────┘  │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                                     │                              │
+│           │ 8. Semantic similarity search                          │
+│           │<───────────────────────────────────────────────────────┤
+│           │    ranked chunks + metadata                            │
+│           │                                                        │
+│           │ 9. Format results & sources                            │
+│           ├──────────────────────────────────────────────>│        │
+│           │       search results                           │        │
+│           │<───────────────────────────────────────────────┤        │
+│           │                                                        │
+│           │ 10. Claude generates context-aware response            │
+│           │<───────────────────────────────────────────────────────┤
+│           │         final response                                 │
+│           │                                                        │
+│           │ 11. get_last_sources()                                 │
+│           ├──────────────────────────────────────────────>│        │
+│           │       source references                        │        │
+│           │<──────────────────────────────────────────────┤        │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+                             │
+                             │ 12. Update session history
+                             │     add_exchange(sess_id, q, resp)
+                             ├─────────────────────>│
+                             │                      │
+                             │ 13. Return response  │
+                             │     + sources        │
+                             │<─────────────────────┤
+                             │                      │
+                             │ 14. JSON response    │
+       ┌─────────────────────┤     {answer,         │
+       │                     │<─────sources,        │
+       │                     │      session_id}     │
+       │                                            │
+       │ 15. Display response & sources             │
+       ├───────────────────>│                      │
+       │                                            │
+
+DATA PROCESSING ARCHITECTURE:
+----------------------------
+
+┌─────────────────────────────────────────────────────────────────┐
+│                     DOCUMENT INGESTION                         │
+└─────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│  COURSE DOCS    │───>│ DOC PROCESSOR   │───>│ VECTOR STORE    │
+│   (docs/*.txt)  │    │ - Parse metadata│    │ - Embed chunks  │
+│                 │    │ - Extract lessons│   │ - Store vectors │
+│                 │    │ - Chunk content │    │ - Index metadata│
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+                                                       │
+                                                       ▼
+                                              ┌─────────────────┐
+                                              │   CHROMADB      │
+                                              │ - Vector search │
+                                              │ - Metadata filt │
+                                              │ - Similarity    │
+                                              └─────────────────┘
+
+SEARCH DECISION FLOW:
+--------------------
+
+User Query ──> Claude AI
+                  │
+                  ▼
+            ┌─────────────┐      YES    ┌─────────────────────┐
+            │ Course      │ ──────────> │ Execute Search Tool │
+            │ Specific?   │             │                     │
+            └─────────────┘             └─────────────────────┘
+                  │                              │
+                  │ NO                           ▼
+                  ▼                     ┌─────────────────────┐
+            ┌─────────────┐             │ Vector Similarity   │
+            │ Answer from │             │ Search in ChromaDB  │
+            │ General     │             └─────────────────────┘
+            │ Knowledge   │                      │
+            └─────────────┘                      ▼
+                  │                     ┌─────────────────────┐
+                  │                     │ Retrieve Relevant   │
+                  │                     │ Course Chunks       │
+                  │                     └─────────────────────┘
+                  │                              │
+                  │              ┌───────────────┘
+                  ▼              ▼
+            ┌─────────────────────────┐
+            │ Generate Final Response │
+            │ with Context & Sources  │
+            └─────────────────────────┘
+
+KEY COMPONENTS:
+--------------
+• Frontend: HTML/CSS/JS interface with real-time chat
+• FastAPI: RESTful API endpoints with CORS support
+• RAG System: Central orchestrator managing all components
+• Session Manager: Maintains conversation context
+• AI Generator: Interfaces with Anthropic Claude API
+• Tool Manager: Handles search tool registration/execution
+• Vector Store: Manages embeddings and similarity search
+• ChromaDB: Vector database for semantic search
+• Document Processor: Parses and chunks course materials
